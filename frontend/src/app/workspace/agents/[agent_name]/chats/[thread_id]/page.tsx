@@ -197,6 +197,7 @@ export default function AgentChatPage() {
     runInputs,
     canSendInput,
     activeRunId,
+    activeRunStartTime,
     regenerateMessage,
     editAndRegenerateMessage,
     isUploading,
@@ -569,6 +570,7 @@ export default function AgentChatPage() {
               <div className="flex min-h-0 flex-1 justify-center">
                 <MessageList
                   activeRunId={activeRunId}
+                  activeRunStartTime={activeRunStartTime}
                   archiveDownloadsEnabled={
                     isNewThread || isMock || threadMetadata.data != null
                   }

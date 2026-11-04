@@ -209,6 +209,7 @@ export default function ChatPage() {
     runInputs,
     canSendInput,
     activeRunId,
+    activeRunStartTime,
     regenerateMessage,
     editAndRegenerateMessage,
     isUploading,
@@ -659,6 +660,7 @@ export default function ChatPage() {
               <div className="flex min-h-0 flex-1 justify-center">
                 <MessageList
                   activeRunId={activeRunId}
+                  activeRunStartTime={activeRunStartTime}
                   archiveDownloadsEnabled={
                     isNewThread || isMock || threadMetadata.data != null
                   }

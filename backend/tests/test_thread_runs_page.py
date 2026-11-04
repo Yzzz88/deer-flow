@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -51,6 +52,17 @@ def test_list_runs_returns_bare_array():
     assert kwargs.get("limit", 100) == 100
     assert "before_created_at" not in kwargs
     assert "before_run_id" not in kwargs
+
+
+def test_run_list_includes_server_time_for_elapsed_duration():
+    app, _ = _make_app([_record("r1", "2026-01-01T00:00:00+00:00")])
+    before = datetime.now(UTC)
+    with TestClient(app) as client:
+        response = client.get("/api/threads/thread-1/runs")
+    after = datetime.now(UTC)
+    assert response.status_code == 200
+    observed = datetime.fromisoformat(response.json()[0]["server_time"].replace("Z", "+00:00"))
+    assert before <= observed <= after
 
 
 @pytest.mark.parametrize("endpoint", ["/runs", "/runs/page", "/runs/legacy-client-run"])

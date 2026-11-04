@@ -1,6 +1,6 @@
 import type { Message } from "@langchain/langgraph-sdk";
 import { afterEach, expect, it, rs } from "@rstest/core";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 import { MessageList } from "@/components/workspace/messages/message-list";
@@ -51,6 +51,7 @@ rs.mock("@/components/workspace/messages/subtask-card", () => ({
 afterEach(() => {
   cleanup();
   selectReasoning.mockClear();
+  rs.useRealTimers();
 });
 
 function reasoningMessage(kind: "processing" | "subagent", duration?: number) {
@@ -78,12 +79,18 @@ function reasoningMessage(kind: "processing" | "subagent", duration?: number) {
 }
 
 const getMessagesMetadata = () => undefined;
-function view(messages: Message[], isLoading: boolean, revision = 0) {
+function view(
+  messages: Message[],
+  isLoading: boolean,
+  revision = 0,
+  activeRunStartTime?: number,
+) {
   return (
     <I18nContext.Provider
       value={{ locale: "en-US", setLocale: () => undefined, t: enUS }}
     >
       <MessageList
+        activeRunStartTime={activeRunStartTime}
         className={`revision-${revision}`}
         threadId="reasoning-cache"
         thread={
@@ -99,6 +106,33 @@ function view(messages: Message[], isLoading: boolean, revision = 0) {
     </I18nContext.Provider>
   );
 }
+
+it("restores the elapsed time when mounting during an active run", () => {
+  rs.useFakeTimers({ toFake: ["Date"] });
+  rs.setSystemTime(new Date("2026-10-07T12:00:47Z"));
+  render(view([], true, 0, Date.parse("2026-10-07T12:00:00Z")));
+  expect(screen.getByTestId("run-activity").textContent).toContain("47s");
+});
+
+it("uses the run start time when it arrives after the stream begins", () => {
+  rs.useFakeTimers({ toFake: ["Date"] });
+  rs.setSystemTime(new Date("2026-10-07T12:00:47Z"));
+  const { rerender } = render(view([], true));
+  expect(screen.getByTestId("run-activity").textContent).toContain("<1s");
+  rerender(view([], true, 0, Date.parse("2026-10-07T12:00:00Z")));
+  expect(screen.getByTestId("run-activity").textContent).toContain("47s");
+});
+
+it("drops a withdrawn run timestamp while another run is loading", () => {
+  rs.useFakeTimers({ toFake: ["Date"] });
+  rs.setSystemTime(new Date("2026-10-07T12:00:47Z"));
+  const { rerender } = render(
+    view([], true, 0, Date.parse("2026-10-07T12:00:00Z")),
+  );
+  expect(screen.getByTestId("run-activity").textContent).toContain("47s");
+  rerender(view([], true));
+  expect(screen.getByTestId("run-activity").textContent).toContain("<1s");
+});
 
 for (const kind of ["processing", "subagent"] as const) {
   for (const isLoading of [true, false]) {

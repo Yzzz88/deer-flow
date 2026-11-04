@@ -2050,6 +2050,7 @@ export function useThreadStream({
   // onCreated fires only for runs this hook submitted. A failed submit stays
   // with the submit flow; only SDK reconnects are handed to recovery.
   const submittedRunIdRef = useRef<string | null>(null);
+  const submittedRunThreadIdRef = useRef<string | null>(null);
 
   // Keep listeners ref updated with latest callbacks
   useEffect(() => {
@@ -2192,6 +2193,7 @@ export function useThreadStream({
     throttle: true,
     onCreated(meta) {
       submittedRunIdRef.current = meta.run_id;
+      submittedRunThreadIdRef.current = meta.thread_id;
       handleStreamStart(meta.thread_id, meta.run_id);
       const now = new Date().toISOString();
       upsertThreadInSearchCache(queryClient, {
@@ -2504,6 +2506,34 @@ export function useThreadStream({
     inputActiveRunId && !completedRunIdsRef.current.has(inputActiveRunId)
       ? inputActiveRunId
       : activeRunId;
+  const submittedRunId =
+    submittedRunThreadIdRef.current === onStreamThreadId
+      ? submittedRunIdRef.current
+      : null;
+  const canUseRunTimestamp =
+    threadId === onStreamThreadId &&
+    knownActiveRunId &&
+    !completedRunIdsRef.current.has(knownActiveRunId) &&
+    (!submittedRunId ||
+      completedRunIdsRef.current.has(submittedRunId) ||
+      submittedRunId === knownActiveRunId);
+  const activeRunRecord = canUseRunTimestamp
+    ? runsQuery.data?.find((run) => run.run_id === knownActiveRunId)
+    : undefined;
+  const activeRunCreatedAt = activeRunRecord?.created_at;
+  const parsedActiveRunStartTime = activeRunCreatedAt
+    ? Date.parse(activeRunCreatedAt)
+    : NaN;
+  const serverTime =
+    activeRunRecord && Reflect.get(activeRunRecord, "server_time");
+  const parsedServerTime =
+    typeof serverTime === "string" ? Date.parse(serverTime) : NaN;
+  const activeRunStartTime =
+    Number.isFinite(parsedActiveRunStartTime) &&
+    Number.isFinite(parsedServerTime)
+      ? runsQuery.dataUpdatedAt -
+        Math.max(0, parsedServerTime - parsedActiveRunStartTime)
+      : undefined;
 
   // reconnectOnMount only knows the run id stored in this tab's
   // sessionStorage. A reopened browser or a new tab has no pointer, so recover
@@ -3461,6 +3491,7 @@ export function useThreadStream({
     ),
     canSendInput: inputCapability && !!inputQuery.data?.active_run_id,
     activeRunId: knownActiveRunId,
+    activeRunStartTime,
   } as const;
 }
 

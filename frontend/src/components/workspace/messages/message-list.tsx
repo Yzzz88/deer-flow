@@ -337,6 +337,7 @@ export function MessageList({
   onBranchTurn,
   canRegenerate = false,
   activeRunId,
+  activeRunStartTime,
   canEdit = false,
   editLockedByGoal = false,
   canBranch = false,
@@ -375,6 +376,7 @@ export function MessageList({
   ) => void | Promise<void>;
   canRegenerate?: boolean;
   activeRunId?: string;
+  activeRunStartTime?: number;
   canEdit?: boolean;
   /** Edit would be allowed but for an active goal: show the pencil locked. */
   editLockedByGoal?: boolean;
@@ -501,12 +503,11 @@ export function MessageList({
   const browserView = useMaybeBrowserView();
   const pushBrowserFrame = browserView?.pushFrame;
   const messageCount = messages.length;
-  // The backend exposes no live start timestamp, so a mid-run mount measures
-  // from mount until authoritative persisted turn_duration replaces it.
   const [turnStartTime, setTurnStartTime] = useState<number | null>(() =>
-    thread.isLoading ? Date.now() : null,
+    thread.isLoading ? (activeRunStartTime ?? Date.now()) : null,
   );
   const turnStartTimeRef = useRef(turnStartTime);
+  const previousActiveRunStartTimeRef = useRef(activeRunStartTime);
   const [clientDurationsByGroupId, setClientDurationsByGroupId] = useState<
     ReadonlyMap<string, number>
   >(() => new Map());
@@ -514,7 +515,7 @@ export function MessageList({
 
   useEffect(() => {
     if (thread.isLoading && !prevIsLoading.current) {
-      const now = Date.now();
+      const now = activeRunStartTime ?? Date.now();
       turnStartTimeRef.current = now;
       setTurnStartTime(now);
     } else if (!thread.isLoading && prevIsLoading.current) {
@@ -538,7 +539,28 @@ export function MessageList({
       setTurnStartTime(null);
     }
     prevIsLoading.current = thread.isLoading;
-  }, [groupedMessages, thread.error, thread.isLoading, threadId]);
+  }, [
+    activeRunStartTime,
+    groupedMessages,
+    thread.error,
+    thread.isLoading,
+    threadId,
+  ]);
+
+  useEffect(() => {
+    if (thread.isLoading && activeRunStartTime !== undefined) {
+      turnStartTimeRef.current = activeRunStartTime;
+      setTurnStartTime(activeRunStartTime);
+    } else if (
+      thread.isLoading &&
+      previousActiveRunStartTimeRef.current !== undefined
+    ) {
+      const now = Date.now();
+      turnStartTimeRef.current = now;
+      setTurnStartTime(now);
+    }
+    previousActiveRunStartTimeRef.current = activeRunStartTime;
+  }, [activeRunStartTime, thread.isLoading]);
 
   useEffect(() => {
     // Only the primary chat surface drives the shared browser panel. The

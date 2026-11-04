@@ -313,6 +313,7 @@ class RunResponse(BaseModel):
     multitask_strategy: str = "reject"
     created_at: str = ""
     updated_at: str = ""
+    server_time: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_tokens: int = 0

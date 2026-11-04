@@ -1,4 +1,5 @@
 import type { Message } from "@langchain/langgraph-sdk";
+import { Client } from "@langchain/langgraph-sdk/client";
 import { afterEach, expect, test, rs } from "@rstest/core";
 
 import {
@@ -35,6 +36,29 @@ function makeSSEResponse(body: string, headers?: HeadersInit) {
 
 afterEach(() => {
   rs.unstubAllGlobals();
+});
+
+test("SDK preserves the server clock returned in a runs list", async () => {
+  const fetchMock = rs.fn(
+    async () =>
+      new Response(
+        JSON.stringify([
+          {
+            run_id: "run-1",
+            thread_id: "thread-1",
+            status: "running",
+            created_at: "2026-10-07T12:00:00Z",
+            server_time: "2026-10-07T12:00:47Z",
+          },
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+  );
+  rs.stubGlobal("fetch", fetchMock);
+  const client = new Client({ apiUrl: "https://example.invalid" });
+  const runs = await client.runs.list("thread-1");
+  expect(Reflect.get(runs[0]!, "server_time")).toBe("2026-10-07T12:00:47Z");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
 test("identifies inactive run stream errors", () => {

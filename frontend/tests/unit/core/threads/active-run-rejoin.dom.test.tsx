@@ -24,7 +24,7 @@ type StreamOptions = {
 };
 
 const apiMockState = rs.hoisted(() => ({
-  listRuns: rs.fn(async () => [] as Run[]),
+  listRuns: rs.fn(async () => [] as Array<Run & { server_time?: string }>),
 }));
 
 const streamMockState = rs.hoisted(() => ({
@@ -66,6 +66,162 @@ const ACTIVE_RUN_META = {
   thread_id: "thread-1",
   run_id: "run-active",
 };
+
+test("does not use an old run timestamp for a newly submitted run", async () => {
+  apiMockState.listRuns.mockResolvedValue([
+    {
+      ...ACTIVE_RUN,
+      created_at: "2026-10-07T12:00:00Z",
+      server_time: "2026-10-07T12:00:47Z",
+    },
+  ]);
+  streamMockState.isLoading = true;
+  const { result, rerender, unmount, queryClient } = renderThread();
+  await flushFrames();
+  expect(result.current.activeRunStartTime).toBe(
+    queryClient.getQueryState(["thread", "thread-1"])!.dataUpdatedAt - 47_000,
+  );
+  act(() => {
+    streamMockState.options?.onFinish?.(
+      { values: { artifacts: [], messages: [], title: "Done" } },
+      ACTIVE_RUN_META,
+    );
+    streamMockState.options?.onCreated?.({
+      thread_id: "thread-1",
+      run_id: "run-new",
+    });
+  });
+  rerender({ activeThreadId: "thread-1" });
+  expect(result.current.activeRunStartTime).toBeUndefined();
+  unmount();
+});
+
+test.each([undefined, "invalid"])(
+  "does not infer a server clock from a missing or invalid timestamp (%s)",
+  async (serverTime) => {
+    apiMockState.listRuns.mockResolvedValue([
+      {
+        ...ACTIVE_RUN,
+        created_at: "2026-10-07T12:00:00Z",
+        server_time: serverTime,
+      },
+    ]);
+    const { result, unmount } = renderThread();
+    await flushFrames();
+    expect(result.current.activeRunStartTime).toBeUndefined();
+    unmount();
+  },
+);
+
+test("keeps the same start time when a fresh server clock arrives", async () => {
+  apiMockState.listRuns.mockImplementation(
+    () =>
+      new Promise(() => {
+        // Control both snapshots through the query cache.
+      }),
+  );
+  const { queryClient, result, unmount } = renderThread();
+  act(() => {
+    queryClient.setQueryData(
+      ["thread", "thread-1"],
+      [
+        {
+          ...ACTIVE_RUN,
+          created_at: "2026-10-07T12:00:00Z",
+          server_time: "2026-10-07T12:00:47Z",
+        },
+      ],
+      { updatedAt: 1_000_000 },
+    );
+  });
+  await flushFrames();
+  expect(result.current.activeRunStartTime).toBe(953_000);
+  act(() => {
+    queryClient.setQueryData(
+      ["thread", "thread-1"],
+      [
+        {
+          ...ACTIVE_RUN,
+          created_at: "2026-10-07T12:00:00Z",
+          server_time: "2026-10-07T12:01:07Z",
+        },
+      ],
+      { updatedAt: 1_020_000 },
+    );
+  });
+  await flushFrames();
+  expect(result.current.activeRunStartTime).toBe(953_000);
+  unmount();
+});
+
+test("never exposes another chat's run time during a chat switch", async () => {
+  apiMockState.listRuns.mockImplementation(
+    () =>
+      new Promise(() => {
+        // Keep cached run snapshots stable across the switch.
+      }),
+  );
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  queryClient.setQueryData(
+    ["thread", "thread-1"],
+    [
+      {
+        ...ACTIVE_RUN,
+        thread_id: "thread-1",
+        created_at: "2026-10-07T12:00:00Z",
+        server_time: "2026-10-07T12:00:47Z",
+      },
+    ],
+  );
+  queryClient.setQueryData(
+    ["thread", "thread-2"],
+    [
+      {
+        ...ACTIVE_RUN,
+        thread_id: "thread-2",
+        run_id: "run-2",
+        created_at: "2026-10-07T12:01:00Z",
+        server_time: "2026-10-07T12:01:20Z",
+      },
+    ],
+  );
+  streamMockState.isLoading = true;
+  const observed: Array<{ threadId: string; start: number | undefined }> = [];
+  const rendered = renderHook(
+    ({ activeThreadId }: { activeThreadId: string }) => {
+      const result = useThreadStream({
+        context: DEFAULT_LOCAL_SETTINGS.context,
+        threadId: activeThreadId,
+      });
+      observed.push({
+        threadId: activeThreadId,
+        start: result.activeRunStartTime,
+      });
+      return result;
+    },
+    {
+      initialProps: { activeThreadId: "thread-1" },
+      wrapper: createWrapper(queryClient),
+    },
+  );
+  await flushFrames();
+  act(() => streamMockState.options?.onCreated?.(ACTIVE_RUN_META));
+  rendered.rerender({ activeThreadId: "thread-2" });
+  await flushFrames();
+  expect(
+    observed
+      .filter((entry) => entry.threadId === "thread-2")
+      .map((entry) => entry.start),
+  ).not.toContain(
+    queryClient.getQueryState(["thread", "thread-1"])!.dataUpdatedAt - 47_000,
+  );
+  expect(rendered.result.current.activeRunStartTime).toBe(
+    queryClient.getQueryState(["thread", "thread-2"])!.dataUpdatedAt - 20_000,
+  );
+  rendered.unmount();
+});
 
 function createWrapper(queryClient: QueryClient) {
   return function ActiveRunRejoinTestWrapper({
