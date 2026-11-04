@@ -83,6 +83,14 @@ def test_allowed_model_still_generates_suggestions(route_env, use_default):
     route_env.model.ainvoke.assert_awaited_once()
 
 
+def test_allowed_model_preserves_literal_think_tag_in_suggestion(route_env):
+    route_env.model.ainvoke.return_value.content = '<think>planning</think>\n["Explain <think>example</think>"]'
+    response = _suggest(route_env, model_name="allowed")
+    assert response.status_code == 200
+    assert response.json() == {"suggestions": ["Explain <think>example</think>"]}
+    route_env.model.ainvoke.assert_awaited_once()
+
+
 def test_disabled_authorization_preserves_existing_behavior(route_env):
     route_env.config.authorization.enabled = False
     assert _suggest(route_env, model_name="restricted").status_code == 200

@@ -42,7 +42,7 @@ _strip_think_blocks = llm_text.strip_think_blocks
 
 
 def _parse_json_string_list(text: str) -> list[str] | None:
-    candidate = _strip_think_blocks(text)
+    candidate = llm_text.strip_think_blocks_for_json(text, opening="[", closing="]")
     candidate = _strip_markdown_code_fence(candidate)
     start = candidate.find("[")
     end = candidate.rfind("]")

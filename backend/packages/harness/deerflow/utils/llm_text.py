@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 # A word boundary also accepts punctuation in unrelated XML/HTML tag names.
@@ -123,6 +124,44 @@ def strip_leading_think_blocks(text: str) -> str:
             return ""
         start = closing[1]
     return text[start:].strip()
+
+
+def strip_think_blocks_for_json(text: str, *, opening: str, closing: str) -> str:
+    """Preserve literal thinking tags in a valid structured response.
+
+    Try the existing JSON span after removing leading reasoning first. If it
+    is not valid JSON, retain the previous inline-reasoning cleanup behavior.
+    """
+    # Remove complete reasoning blocks preceding the first possible JSON
+    # value. Once the value starts, its strings may contain literal tags.
+    parts: list[str] = []
+    pos = 0
+    json_start = text.find(opening)
+    while (tag := _find_think_open(text, pos)) is not None:
+        if 0 <= json_start < pos:
+            json_start = text.find(opening, pos)
+        if json_start >= 0 and json_start < tag[0]:
+            break
+        parts.append(text[pos : tag[0]])
+        if _is_self_closing_think_tag(text, *tag):
+            pos = tag[1]
+            continue
+        close = _find_think_close(text, tag[1])
+        if close is None:
+            return strip_think_blocks(text)
+        pos = close[1]
+    candidate = "".join(parts) + text[pos:]
+    start = candidate.find(opening)
+    # A JSON example inside a non-leading reasoning block is not the answer.
+    if start >= 0 and not _THINK_OPEN_PREFIX_RE.search(candidate, 0, start):
+        try:
+            _, end = json.JSONDecoder().raw_decode(candidate, start)
+        except (ValueError, RecursionError):
+            pass
+        else:
+            if candidate[end - 1] == closing:
+                return candidate[:end] + strip_think_blocks(candidate[end:])
+    return strip_think_blocks(text)
 
 
 def strip_markdown_code_fence(text: str) -> str:
