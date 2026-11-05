@@ -28,8 +28,7 @@ def normalize_retrieval_result(result: Mapping[str, Any], *, dataset_names_by_id
         source = None
         if isinstance(title, str) and title.strip():
             source = KnowledgeSource(provider="ragflow", title=title.strip()[:500], excerpt=content[:100_000], dataset_name=dataset_names_by_id.get(str(chunk.get("dataset_id"))))
-        score = _score(chunk.get("similarity"))
-        hits.append(RetrievalHit(content=content[:100_000], source=source, score=score if score is not None and math.isfinite(score) else None))
+        hits.append(RetrievalHit(content=content[:100_000], source=source, score=_score(chunk.get("similarity"))))
     return RetrievalResult(hits=hits)
 
 
@@ -45,9 +44,10 @@ def _score(value: object) -> float | None:
     if isinstance(value, bool):
         return None
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        score = float(value)
+    except (TypeError, ValueError, OverflowError):
         return None
+    return score if math.isfinite(score) else None
 
 
 def format_retrieval_result(

@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 import deerflow.community.ragflow.tools as ragflow_tools
 from deerflow.community.ragflow.client import RAGFlowAPIError, RAGFlowConnectionError
-from deerflow.community.ragflow.formatting import format_retrieval_result
+from deerflow.community.ragflow.formatting import format_retrieval_result, normalize_retrieval_result
 from deerflow.config.tool_config import ToolConfig
 from deerflow.tools.tools import get_available_tools
 
@@ -889,6 +889,23 @@ async def test_empty_retrieval_has_explicit_english_message(monkeypatch: pytest.
     result = await ragflow_tools.knowledge_search("nothing")
 
     assert result == "No relevant content found."
+
+
+@pytest.mark.parametrize("invalid_score", [10**400, "NaN", "Infinity", "-Infinity"])
+def test_invalid_similarity_preserves_retrieved_content(invalid_score: object) -> None:
+    retrieval = {
+        "chunks": [
+            {"content": "Relevant policy", "similarity": invalid_score},
+            {"content": "Related policy", "similarity": "0.75"},
+        ],
+    }
+
+    result = normalize_retrieval_result(retrieval, dataset_names_by_id={})
+    assert [(hit.content, hit.score) for hit in result.hits] == [("Relevant policy", None), ("Related policy", 0.75)]
+
+    formatted = format_retrieval_result(retrieval, dataset_names_by_id={})
+    assert "Unknown document\nRelevant policy" in formatted
+    assert "Unknown document  (score 0.75)\nRelated policy" in formatted
 
 
 def test_formatting_uses_only_normalized_chunk_fields() -> None:
