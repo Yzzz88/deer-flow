@@ -281,6 +281,72 @@ async def test_dispatch_one_input_preserves_claim_error_without_admitting_run(in
 
 
 @pytest.mark.asyncio
+async def test_thread_input_listing_keeps_unresolved_input_ahead_of_terminal_receipts(input_store, monkeypatch):
+    from unittest.mock import AsyncMock
+    from uuid import UUID
+
+    from _router_auth_helpers import make_authed_test_app
+    from httpx import ASGITransport, AsyncClient
+
+    from app.gateway.auth.models import User
+    from app.gateway.routers import thread_runs
+    from deerflow.runtime.runs.manager import RunManager
+
+    user = User(id=UUID(USER_ID), email="input-test@example.com", password_hash="unused")
+    app = make_authed_test_app(user_factory=lambda: user)
+
+    @app.middleware("http")
+    async def session_source(request, call_next):
+        request.state.auth_source = "session"
+        return await call_next(request)
+
+    app.include_router(thread_runs.router)
+    app.state.run_manager = RunManager(store=input_store)
+    monkeypatch.setattr("app.gateway.run_inputs.get_run_context", lambda _: SimpleNamespace(agent_runs=object()))
+    monkeypatch.setattr("app.gateway.services.resolve_thread_assistant_id", AsyncMock(return_value="lead_agent"))
+    create_run = AsyncMock(return_value=SimpleNamespace(run_id="retry-child", status="pending", assistant_id="lead_agent", stop_reason=None))
+    monkeypatch.setattr(thread_runs, "create_run", create_run)
+
+    earlier = RunInputs(input_store, "run", USER_ID, "worker")
+    await earlier.submit("retry-me", "Generate the remaining exercises", "queue")
+    await earlier.pause()
+    await input_store.update_status("run", "error")
+
+    parent = await input_store.get("run", user_id=USER_ID)
+    created_at = datetime.fromisoformat(parent["created_at"])
+    for batch in range(2):
+        run_id = f"batch-{batch}"
+        await input_store.put(run_id, thread_id="thread", user_id=USER_ID, status="running", created_at=(created_at + timedelta(seconds=batch + 1)).isoformat())
+        inputs = RunInputs(input_store, run_id, USER_ID)
+        for index in range(16):
+            await inputs.submit(f"slide-{index}", f"Generate slide {index}", "queue")
+        await inputs.cancel("slide-15")
+        await input_store.update_status(run_id, "success")
+        for index in range(15):
+            input_id = f"slide-{index}"
+            await inputs.claim(input_id)
+            await inputs.dispatched(input_id, f"{run_id}-{input_id}")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/threads/thread/inputs")
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert len(result["items"]) == 32
+        assert [(item["id"], item["status"]) for item in result["items"][:1]] == [("retry-me", "not_applied")]
+        assert [(item["id"], item["status"]) for item in result["items"][-2:]] == [("slide-14", "applied"), ("slide-15", "cancelled")]
+        assert result["active_run_id"] is None
+        item = result["items"][0]
+        retry = await client.post(f"/api/threads/thread/runs/{item['target_run_id']}/inputs/{item['id']}/retry")
+        assert retry.status_code == 200, retry.text
+        assert retry.json() == {"run_id": "retry-child"}
+
+    create_run.assert_awaited_once()
+    assert create_run.call_args.kwargs["idempotency_key"] == "run-input:run:retry-me"
+    saved_item = (await earlier.read())["items"][0]
+    assert (saved_item["status"], saved_item["run_id"]) == ("applied", "retry-child")
+
+
+@pytest.mark.asyncio
 async def test_http_input_admission_and_status_are_owner_scoped(input_store, monkeypatch):
     from uuid import UUID, uuid4
 

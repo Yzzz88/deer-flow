@@ -75,7 +75,21 @@ async def list_thread_inputs(thread_id: str, request: Request):
             if status in ("pending", "applying") and (row["status"] not in ("pending", "running", "success") or row.get("stop_reason")):
                 status = "not_applied"
             items.append({key: value for key, value in {**entry, "status": status, "target_run_id": row["run_id"]}.items() if key != "context"})
-    return {"items": items[-32:], "active_run_id": await _store(request).active_input_run(thread_id, user_id=user_id)}
+    # Keep unresolved inputs visible even when terminal receipts fill the recent window.
+    # Preserve recent receipts in the remaining slots for submission reconciliation.
+    limit = 32
+    terminal_statuses = ("applied", "cancelled")
+    terminal_slots = max(0, limit - sum(item["status"] not in terminal_statuses for item in items))
+    recent = []
+    for item in reversed(items):
+        if item["status"] in terminal_statuses:
+            if terminal_slots == 0:
+                continue
+            terminal_slots -= 1
+        recent.append(item)
+        if len(recent) == limit:
+            break
+    return {"items": recent[::-1], "active_run_id": await _store(request).active_input_run(thread_id, user_id=user_id)}
 
 
 async def dispatch_queued_inputs(inputs: RunInputs, *, agent_runs, thread_id: str):
