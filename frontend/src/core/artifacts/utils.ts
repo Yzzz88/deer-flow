@@ -1,6 +1,7 @@
 import type { Message } from "@langchain/langgraph-sdk";
 
 import { getBackendBaseURL } from "../config";
+import { indexToolResults } from "../messages/tool-result";
 import { extractPresentFilesFromMessage } from "../messages/utils";
 import { isStaticWebsiteOnly } from "../static-mode";
 import type { AgentThreadState } from "../threads";
@@ -104,20 +105,77 @@ export function extractArtifactsFromThread(thread: {
   return thread.values.artifacts ?? EMPTY_ARTIFACT_PATHS;
 }
 
+function sharedArtifactPathsFromResults(
+  message: Message,
+  results: readonly Message[] | undefined,
+): string[] {
+  if (message.type !== "ai" || !results?.length) return [];
+
+  const paths: string[] = [];
+  for (const call of message.tool_calls ?? []) {
+    if (call.name !== "present_shared_artifact") continue;
+    const { origin_thread_id, path, sha256 } = call.args;
+    if (
+      typeof origin_thread_id !== "string" ||
+      typeof path !== "string" ||
+      typeof sha256 !== "string" ||
+      !/^[a-f0-9]{64}$/.test(sha256) ||
+      /[\\\x00-\x1f]/.test(path)
+    ) {
+      continue;
+    }
+    // Existing checkpoints contain the server's success receipt as text.
+    // Match the result to this exact invocation before trusting its path.
+    const verified = results.some(
+      (result) =>
+        result.type === "tool" &&
+        result.name === call.name &&
+        result.tool_call_id === call.id &&
+        result.content ===
+          "Successfully presented shared artifact; origin_thread_id=" +
+            origin_thread_id +
+            "; sha256=" +
+            sha256,
+    );
+    if (!verified) continue;
+
+    const parts: string[] = [];
+    for (const part of path.split("/")) {
+      if (!part || part === ".") continue;
+      if (part === ".." && parts.length && parts.at(-1) !== "..") {
+        parts.pop();
+      } else {
+        parts.push(part);
+      }
+    }
+    const normalizedPath = "/" + parts.join("/");
+    if (normalizedPath.startsWith("/mnt/user-data/outputs/")) {
+      paths.push(normalizedPath);
+    }
+  }
+  return paths;
+}
+
 /**
- * Adds the `/mnt/` paths passed to `present_files` in `messages` to the
- * thread's artifact list. A reopened thread rebuilds its values from the
- * Gateway's POST /history head, which carries messages but not `artifacts`;
- * the backend fills `artifacts` from those same `present_files` calls, so the
- * messages are enough to recover the list. Returns `stateArtifacts` itself
- * when no message presents files.
+ * Recovers presented artifacts from messages when the history head has no
+ * artifact state. Shared handoffs require a matching successful tool result.
+ * Returns the original state array when no message presents an artifact.
  */
 export function collectThreadArtifactPaths(
   stateArtifacts: readonly string[],
   messages: readonly Message[],
 ): readonly string[] {
+  const sharedResults = messages.some(
+    (message) =>
+      message.type === "tool" && message.name === "present_shared_artifact",
+  )
+    ? indexToolResults(messages)
+    : undefined;
   const presented = messages
-    .flatMap((message) => extractPresentFilesFromMessage(message))
+    .flatMap((message, index) => [
+      ...extractPresentFilesFromMessage(message),
+      ...sharedArtifactPathsFromResults(message, sharedResults?.get(index)),
+    ])
     .filter(
       (path): path is string =>
         typeof path === "string" && path.startsWith("/mnt/"),

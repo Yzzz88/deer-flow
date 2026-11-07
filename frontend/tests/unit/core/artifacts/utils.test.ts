@@ -452,6 +452,59 @@ describe("artifact URL helpers", () => {
     expect(collectThreadArtifactPaths(state, [messages[0]!])).toBe(state);
   });
 
+  test("restores verified shared artifacts after reopening a thread", async () => {
+    const { collectThreadArtifactPaths } = await loadFreshArtifactUtils();
+    const sha256 = "a".repeat(64);
+    const messages = [
+      {
+        type: "ai",
+        id: "handoff",
+        content: "",
+        tool_calls: [
+          {
+            id: "handoff-ok",
+            name: "present_shared_artifact",
+            args: {
+              origin_thread_id: "source",
+              path: "mnt/user-data/outputs/old/../slides/lesson%20.pptx",
+              sha256,
+            },
+          },
+          {
+            id: "handoff-failed",
+            name: "present_shared_artifact",
+            args: {
+              origin_thread_id: "source",
+              path: "/mnt/user-data/outputs/slides/unverified.pptx",
+              sha256,
+            },
+          },
+        ],
+      },
+      {
+        type: "tool",
+        id: "success",
+        name: "present_shared_artifact",
+        tool_call_id: "handoff-ok",
+        content:
+          "Successfully presented shared artifact; origin_thread_id=source; sha256=" +
+          sha256,
+      },
+      {
+        type: "tool",
+        id: "failure",
+        name: "present_shared_artifact",
+        tool_call_id: "handoff-failed",
+        content:
+          "Error: Source artifact changed; expected SHA-256 does not match",
+      },
+    ] as Parameters<typeof collectThreadArtifactPaths>[1];
+
+    expect(collectThreadArtifactPaths([], messages)).toEqual([
+      "/mnt/user-data/outputs/slides/lesson%20.pptx",
+    ]);
+  });
+
   test("builds encoded write-file URLs without undefined query parameters", async () => {
     const { buildWriteFileArtifactURL } = await loadFreshArtifactUtils();
     const filepath = "/mnt/user-data/outputs/a b#c?%20.md";
